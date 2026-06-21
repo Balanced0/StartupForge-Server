@@ -1,7 +1,7 @@
+require("dotenv").config();
 const express = require("express");
 const app = express();
 const port = process.env.PORT;
-require("dotenv").config();
 app.use(express.json());
 const cors = require("cors");
 app.use(cors());
@@ -43,7 +43,7 @@ async function run() {
       });
       res.send(startup);
     });
-    
+
     app.post("/api/startups", async (req, res) => {
       const startup = req.body;
       const new_startup = {
@@ -53,6 +53,16 @@ async function run() {
         updatedAt: new Date(),
       };
       const result = await startupCollection.insertOne(new_startup);
+      res.send(result);
+    });
+
+    app.patch("/api/startups/:id", async (req, res) => {
+      const id = req.params.id;
+      const updates = req.body;
+      const result = await startupCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { ...updates, updatedAt: new Date() } },
+      );
       res.send(result);
     });
     // Send a ping to confirm a successful connection
