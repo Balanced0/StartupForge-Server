@@ -26,6 +26,24 @@ async function run() {
     const startupCollection = db.collection("startups");
 
     //startup related apis
+    app.get("/api/startups", async (req, res) => {
+      const { founder_email } = req.query;
+      const query = founder_email ? { founder_email } : {};
+      const startups = await startupCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(startups);
+    });
+
+    app.get("/api/startups/:id", async (req, res) => {
+      const id = req.params.id;
+      const startup = await startupCollection.findOne({
+        _id: new ObjectId(id),
+      });
+      res.send(startup);
+    });
+    
     app.post("/api/startups", async (req, res) => {
       const startup = req.body;
       const new_startup = {
