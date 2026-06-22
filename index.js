@@ -87,6 +87,24 @@ async function run() {
       const result = await opportunityCollection.insertOne(doc);
       res.send(result);
     });
+
+    app.get("/api/opportunities", async (req, res) => {
+      const { startup_id } = req.query;
+      const query = startup_id ? { startup_id } : {};
+      const opportunities = await opportunityCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(opportunities);
+    });
+
+    app.get("/api/opportunities/:id", async (req, res) => {
+      const id = req.params.id;
+      const opportunity = await opportunityCollection.findOne({
+        _id: new ObjectId(id),
+      });
+      res.send(opportunity);
+    });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
