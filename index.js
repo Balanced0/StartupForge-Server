@@ -24,6 +24,7 @@ async function run() {
     await client.connect();
     const db = client.db("StartUpForge");
     const startupCollection = db.collection("startups");
+    const opportunityCollection = db.collection("opportunities");
 
     //startup related apis
     app.get("/api/startups", async (req, res) => {
@@ -71,6 +72,19 @@ async function run() {
       const result = await startupCollection.deleteOne({
         _id: new ObjectId(id),
       });
+      res.send(result);
+    });
+
+    //Opportunity related apis
+    app.post("/api/opportunities", async (req, res) => {
+      const opportunity = req.body;
+      const doc = {
+        ...opportunity,
+        status: "open",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const result = await opportunityCollection.insertOne(doc);
       res.send(result);
     });
     // Send a ping to confirm a successful connection
