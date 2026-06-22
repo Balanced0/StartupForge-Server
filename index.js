@@ -105,6 +105,24 @@ async function run() {
       });
       res.send(opportunity);
     });
+
+    app.patch("/api/opportunities/:id", async (req, res) => {
+      const id = req.params.id;
+      const updates = req.body;
+      const result = await opportunityCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { ...updates, updatedAt: new Date() } },
+      );
+      res.send(result);
+    });
+
+    app.delete("/api/opportunities/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await opportunityCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
