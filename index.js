@@ -220,14 +220,14 @@ async function run() {
     // User Profile related APIs
     app.get("/api/users/:email", async (req, res) => {
       const { email } = req.params;
-      const user = await db.collection("users").findOne({ email });
+      const user = await db.collection("user").findOne({ email });
       res.send(user || {});
     });
 
     app.patch("/api/users/:email", async (req, res) => {
       const { email } = req.params;
       const { name, image, skills, bio } = req.body;
-      const result = await db.collection("users").updateOne(
+      const result = await db.collection("user").updateOne(
         { email },
         {
           $set: {
@@ -242,6 +242,120 @@ async function run() {
         }
       );
       res.send(result);
+    });
+
+    // Admin dashboard related APIs
+    app.get("/api/admin/stats", async (req, res) => {
+      try {
+        const totalUsers = await db.collection("user").countDocuments();
+        const totalStartups = await db.collection("startups").countDocuments();
+        const totalOpportunities = await db.collection("opportunities").countDocuments();
+        const totalRevenue = 0;
+        res.send({ totalUsers, totalStartups, totalOpportunities, totalRevenue });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch stats", error: err.message });
+      }
+    });
+
+    app.get("/api/admin/users", async (req, res) => {
+      try {
+        const users = await db.collection("user").find({}).toArray();
+        res.send(users);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch users", error: err.message });
+      }
+    });
+
+    app.post("/api/admin/users/:email/block", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const result = await db.collection("user").updateOne(
+          { email },
+          { $set: { isBlocked: true } }
+        );
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to block user", error: err.message });
+      }
+    });
+
+    app.post("/api/admin/users/:email/unblock", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const result = await db.collection("user").updateOne(
+          { email },
+          { $set: { isBlocked: false } }
+        );
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to unblock user", error: err.message });
+      }
+    });
+
+    app.get("/api/admin/startups", async (req, res) => {
+      try {
+        const startups = await db.collection("startups").find({}).sort({ createdAt: -1 }).toArray();
+        res.send(startups);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch startups", error: err.message });
+      }
+    });
+
+    app.post("/api/admin/startups/:id/approve", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await db.collection("startups").updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "active", updatedAt: new Date() } }
+        );
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to approve startup", error: err.message });
+      }
+    });
+
+    app.delete("/api/admin/startups/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await db.collection("startups").deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to remove startup", error: err.message });
+      }
+    });
+
+    app.get("/api/admin/transactions", async (req, res) => {
+      try {
+        // dummy
+        const mockTransactions = [
+          {
+            _id: "t1",
+            user: "alex.founder@example.com",
+            amount: 49.00,
+            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+            paymentStatus: "Succeeded"
+          },
+          {
+            _id: "t2",
+            user: "sarah.jones@example.com",
+            amount: 99.00,
+            date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+            paymentStatus: "Succeeded"
+          },
+          {
+            _id: "t3",
+            user: "michael.smith@example.com",
+            amount: 49.00,
+            date: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+            paymentStatus: "Pending"
+          }
+        ];
+        res.send(mockTransactions);
+      } catch (err) {
+        res.status(500).send({ message: "Failed to fetch transactions", error: err.message });
+      }
     });
 
     // Send a ping to confirm a successful connection
