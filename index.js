@@ -137,6 +137,7 @@ async function run() {
       const doc = {
         ...application,
         status: "Pending",
+        applied_at: new Date(),
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -203,6 +204,7 @@ async function run() {
             portfolio_link: 1,
             motivation_message: 1,
             status: 1,
+            applied_at: 1,
             createdAt: 1,
             updatedAt: 1,
             opportunity_name: { $ifNull: ["$opportunity.role_title", "Unknown Role"] },
