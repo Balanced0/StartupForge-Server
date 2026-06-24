@@ -75,12 +75,67 @@ async function run() {
 
         res.send(enriched);
       } catch (err) {
+        res.status(500).send({
+          message: "Failed to fetch featured startups",
+          error: err.message,
+        });
+      }
+    });
+
+    app.get("/api/startups/browse", async (req, res) => {
+      try {
+        const { search, industry, funding_stage } = req.query;
+        const query = { status: "active" };
+
+        if (search) {
+          query.$or = [
+            { startup_name: { $regex: search, $options: "i" } },
+            { description: { $regex: search, $options: "i" } },
+          ];
+        }
+        if (industry && industry !== "All")
+          query.industry = { $regex: industry, $options: "i" };
+        if (funding_stage && funding_stage !== "All")
+          query.funding_stage = funding_stage;
+
+        const startups = await startupCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        const enriched = await Promise.all(
+          startups.map(async (startup) => {
+            const id = startup._id.toString();
+
+            const openings_count = await opportunityCollection.countDocuments({
+              startup_id: id,
+              status: "open",
+            });
+
+            const opps = await opportunityCollection
+              .find({ startup_id: id })
+              .project({ _id: 1 })
+              .toArray();
+
+            const oppIds = opps.map((o) => o._id.toString());
+
+            const members_count =
+              oppIds.length > 0
+                ? await db.collection("applications").countDocuments({
+                    opportunity_id: { $in: oppIds },
+                    status: "Accepted",
+                  })
+                : 0;
+
+            return { ...startup, openings_count, members_count };
+          }),
+        );
+
+        res.send(enriched);
+      } catch (err) {
         res
           .status(500)
-          .send({
-            message: "Failed to fetch featured startups",
-            error: err.message,
-          });
+          .send({ message: "Failed to fetch startups", error: err.message });
       }
     });
 
@@ -454,12 +509,10 @@ async function run() {
         ];
         res.send(mockTransactions);
       } catch (err) {
-        res
-          .status(500)
-          .send({
-            message: "Failed to fetch transactions",
-            error: err.message,
-          });
+        res.status(500).send({
+          message: "Failed to fetch transactions",
+          error: err.message,
+        });
       }
     });
 
