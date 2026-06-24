@@ -37,6 +37,53 @@ async function run() {
       res.send(startups);
     });
 
+    app.get("/api/startups/featured", async (req, res) => {
+      try {
+        const startups = await startupCollection
+          .find({ status: "active" })
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .toArray();
+
+        const enriched = await Promise.all(
+          startups.map(async (startup) => {
+            const id = startup._id.toString();
+
+            const openings_count = await opportunityCollection.countDocuments({
+              startup_id: id,
+              status: "open",
+            });
+
+            const opps = await opportunityCollection
+              .find({ startup_id: id })
+              .project({ _id: 1 })
+              .toArray();
+
+            const oppIds = opps.map((o) => o._id.toString());
+
+            const members_count =
+              oppIds.length > 0
+                ? await db.collection("applications").countDocuments({
+                    opportunity_id: { $in: oppIds },
+                    status: "Accepted",
+                  })
+                : 0;
+
+            return { ...startup, openings_count, members_count };
+          }),
+        );
+
+        res.send(enriched);
+      } catch (err) {
+        res
+          .status(500)
+          .send({
+            message: "Failed to fetch featured startups",
+            error: err.message,
+          });
+      }
+    });
+
     app.get("/api/startups/:id", async (req, res) => {
       const id = req.params.id;
       const startup = await startupCollection.findOne({
@@ -132,7 +179,9 @@ async function run() {
         applicant_email: application.applicant_email,
       });
       if (existing) {
-        return res.status(400).send({ message: "You have already applied to this opportunity." });
+        return res
+          .status(400)
+          .send({ message: "You have already applied to this opportunity." });
       }
       const doc = {
         ...application,
@@ -148,72 +197,95 @@ async function run() {
     app.get("/api/applications", async (req, res) => {
       const { applicant_email } = req.query;
       const query = applicant_email ? { applicant_email } : {};
-      
-      const applications = await db.collection("applications").aggregate([
-        { $match: query },
-        {
-          $addFields: {
-            opportunity_id_obj: {
-              $cond: {
-                if: { $eq: [{ $strLenCP: { $ifNull: ["$opportunity_id", ""] } }, 24] },
-                then: { $toObjectId: "$opportunity_id" },
-                else: null
-              }
-            }
-          }
-        },
-        {
-          $lookup: {
-            from: "opportunities",
-            localField: "opportunity_id_obj",
-            foreignField: "_id",
-            as: "opportunity"
-          }
-        },
-        { $unwind: { path: "$opportunity", preserveNullAndEmptyArrays: true } },
-        {
-          $addFields: {
-            startup_id_obj: {
-              $cond: {
-                if: {
-                  $and: [
-                    { $gt: ["$opportunity", null] },
-                    { $eq: [{ $strLenCP: { $ifNull: ["$opportunity.startup_id", ""] } }, 24] }
-                  ]
+
+      const applications = await db
+        .collection("applications")
+        .aggregate([
+          { $match: query },
+          {
+            $addFields: {
+              opportunity_id_obj: {
+                $cond: {
+                  if: {
+                    $eq: [
+                      { $strLenCP: { $ifNull: ["$opportunity_id", ""] } },
+                      24,
+                    ],
+                  },
+                  then: { $toObjectId: "$opportunity_id" },
+                  else: null,
                 },
-                then: { $toObjectId: "$opportunity.startup_id" },
-                else: null
-              }
-            }
-          }
-        },
-        {
-          $lookup: {
-            from: "startups",
-            localField: "startup_id_obj",
-            foreignField: "_id",
-            as: "startup"
-          }
-        },
-        { $unwind: { path: "$startup", preserveNullAndEmptyArrays: true } },
-        {
-          $project: {
-            _id: 1,
-            opportunity_id: 1,
-            applicant_email: 1,
-            portfolio_link: 1,
-            motivation_message: 1,
-            status: 1,
-            applied_at: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            opportunity_name: { $ifNull: ["$opportunity.role_title", "Unknown Role"] },
-            startup_name: { $ifNull: ["$startup.startup_name", "Unknown Startup"] }
-          }
-        },
-        { $sort: { createdAt: -1 } }
-      ]).toArray();
-      
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: "opportunities",
+              localField: "opportunity_id_obj",
+              foreignField: "_id",
+              as: "opportunity",
+            },
+          },
+          {
+            $unwind: { path: "$opportunity", preserveNullAndEmptyArrays: true },
+          },
+          {
+            $addFields: {
+              startup_id_obj: {
+                $cond: {
+                  if: {
+                    $and: [
+                      { $gt: ["$opportunity", null] },
+                      {
+                        $eq: [
+                          {
+                            $strLenCP: {
+                              $ifNull: ["$opportunity.startup_id", ""],
+                            },
+                          },
+                          24,
+                        ],
+                      },
+                    ],
+                  },
+                  then: { $toObjectId: "$opportunity.startup_id" },
+                  else: null,
+                },
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: "startups",
+              localField: "startup_id_obj",
+              foreignField: "_id",
+              as: "startup",
+            },
+          },
+          { $unwind: { path: "$startup", preserveNullAndEmptyArrays: true } },
+          {
+            $project: {
+              _id: 1,
+              opportunity_id: 1,
+              applicant_email: 1,
+              portfolio_link: 1,
+              motivation_message: 1,
+              status: 1,
+              applied_at: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              opportunity_name: {
+                $ifNull: ["$opportunity.role_title", "Unknown Role"],
+              },
+              startup_name: {
+                $ifNull: ["$startup.startup_name", "Unknown Startup"],
+              },
+            },
+          },
+          { $sort: { createdAt: -1 } },
+        ])
+        .toArray();
+
       res.send(applications);
     });
 
@@ -235,11 +307,14 @@ async function run() {
             image,
             skills: Array.isArray(skills)
               ? skills
-              : (skills || "").split(",").map((s) => s.trim()).filter(Boolean),
+              : (skills || "")
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean),
             bio,
-            updatedAt: new Date()
-          }
-        }
+            updatedAt: new Date(),
+          },
+        },
       );
       res.send(result);
     });
@@ -249,11 +324,20 @@ async function run() {
       try {
         const totalUsers = await db.collection("user").countDocuments();
         const totalStartups = await db.collection("startups").countDocuments();
-        const totalOpportunities = await db.collection("opportunities").countDocuments();
+        const totalOpportunities = await db
+          .collection("opportunities")
+          .countDocuments();
         const totalRevenue = 0;
-        res.send({ totalUsers, totalStartups, totalOpportunities, totalRevenue });
+        res.send({
+          totalUsers,
+          totalStartups,
+          totalOpportunities,
+          totalRevenue,
+        });
       } catch (err) {
-        res.status(500).send({ message: "Failed to fetch stats", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to fetch stats", error: err.message });
       }
     });
 
@@ -262,55 +346,69 @@ async function run() {
         const users = await db.collection("user").find({}).toArray();
         res.send(users);
       } catch (err) {
-        res.status(500).send({ message: "Failed to fetch users", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to fetch users", error: err.message });
       }
     });
 
     app.post("/api/admin/users/:email/block", async (req, res) => {
       try {
         const { email } = req.params;
-        const result = await db.collection("user").updateOne(
-          { email },
-          { $set: { isBlocked: true } }
-        );
+        const result = await db
+          .collection("user")
+          .updateOne({ email }, { $set: { isBlocked: true } });
         res.send({ success: true, result });
       } catch (err) {
-        res.status(500).send({ message: "Failed to block user", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to block user", error: err.message });
       }
     });
 
     app.post("/api/admin/users/:email/unblock", async (req, res) => {
       try {
         const { email } = req.params;
-        const result = await db.collection("user").updateOne(
-          { email },
-          { $set: { isBlocked: false } }
-        );
+        const result = await db
+          .collection("user")
+          .updateOne({ email }, { $set: { isBlocked: false } });
         res.send({ success: true, result });
       } catch (err) {
-        res.status(500).send({ message: "Failed to unblock user", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to unblock user", error: err.message });
       }
     });
 
     app.get("/api/admin/startups", async (req, res) => {
       try {
-        const startups = await db.collection("startups").find({}).sort({ createdAt: -1 }).toArray();
+        const startups = await db
+          .collection("startups")
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
         res.send(startups);
       } catch (err) {
-        res.status(500).send({ message: "Failed to fetch startups", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to fetch startups", error: err.message });
       }
     });
 
     app.post("/api/admin/startups/:id/approve", async (req, res) => {
       try {
         const { id } = req.params;
-        const result = await db.collection("startups").updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { status: "active", updatedAt: new Date() } }
-        );
+        const result = await db
+          .collection("startups")
+          .updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { status: "active", updatedAt: new Date() } },
+          );
         res.send({ success: true, result });
       } catch (err) {
-        res.status(500).send({ message: "Failed to approve startup", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to approve startup", error: err.message });
       }
     });
 
@@ -322,7 +420,9 @@ async function run() {
         });
         res.send({ success: true, result });
       } catch (err) {
-        res.status(500).send({ message: "Failed to remove startup", error: err.message });
+        res
+          .status(500)
+          .send({ message: "Failed to remove startup", error: err.message });
       }
     });
 
@@ -333,28 +433,33 @@ async function run() {
           {
             _id: "t1",
             user: "alex.founder@example.com",
-            amount: 49.00,
+            amount: 49.0,
             date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Succeeded"
+            paymentStatus: "Succeeded",
           },
           {
             _id: "t2",
             user: "sarah.jones@example.com",
-            amount: 99.00,
+            amount: 99.0,
             date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Succeeded"
+            paymentStatus: "Succeeded",
           },
           {
             _id: "t3",
             user: "michael.smith@example.com",
-            amount: 49.00,
+            amount: 49.0,
             date: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Pending"
-          }
+            paymentStatus: "Pending",
+          },
         ];
         res.send(mockTransactions);
       } catch (err) {
-        res.status(500).send({ message: "Failed to fetch transactions", error: err.message });
+        res
+          .status(500)
+          .send({
+            message: "Failed to fetch transactions",
+            error: err.message,
+          });
       }
     });
 
