@@ -200,6 +200,108 @@ async function run() {
       res.send(opportunities);
     });
 
+    app.get("/api/opportunities/featured", async (req, res) => {
+      try {
+        const opportunities = await opportunityCollection
+          .find({ status: "open" })
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .toArray();
+
+        const enriched = await Promise.all(
+          opportunities.map(async (opp) => {
+            const startup = await startupCollection.findOne({
+              _id: new ObjectId(opp.startup_id),
+            });
+            return {
+              ...opp,
+              startup_name: startup?.startup_name || "Unknown Startup",
+              startup_logo: startup?.logo || null,
+            };
+          }),
+        );
+
+        res.send(enriched);
+      } catch (err) {
+        res
+          .status(500)
+          .send({
+            message: "Failed to fetch featured opportunities",
+            error: err.message,
+          });
+      }
+    });
+
+    app.get("/api/opportunities/browse", async (req, res) => {
+      try {
+        const { search, work_type, industry, page = 1, limit = 9 } = req.query;
+        const query = { status: "open" };
+
+        if (search) {
+          query.$or = [
+            { role_title: { $regex: search, $options: "i" } },
+            {
+              required_skills: {
+                $elemMatch: { $regex: search, $options: "i" },
+              },
+            },
+          ];
+        }
+
+        if (work_type && work_type !== "All") {
+          query.work_type = { $in: work_type.split(",") };
+        }
+
+        let startupIds = null;
+        if (industry && industry !== "All") {
+          const matchingStartups = await startupCollection
+            .find({ industry: { $regex: industry, $options: "i" } })
+            .project({ _id: 1 })
+            .toArray();
+          startupIds = matchingStartups.map((s) => s._id.toString());
+          query.startup_id = { $in: startupIds };
+        }
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const total = await opportunityCollection.countDocuments(query);
+
+        const opportunities = await opportunityCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .toArray();
+
+        const enriched = await Promise.all(
+          opportunities.map(async (opp) => {
+            const startup = await startupCollection.findOne({
+              _id: new ObjectId(opp.startup_id),
+            });
+            return {
+              ...opp,
+              startup_name: startup?.startup_name || "Unknown Startup",
+              startup_logo: startup?.logo || null,
+              industry: startup?.industry || null,
+            };
+          }),
+        );
+
+        res.send({
+          opportunities: enriched,
+          total,
+          page: parseInt(page),
+          totalPages: Math.ceil(total / parseInt(limit)),
+        });
+      } catch (err) {
+        res
+          .status(500)
+          .send({
+            message: "Failed to fetch opportunities",
+            error: err.message,
+          });
+      }
+    });
+
     app.get("/api/opportunities/:id", async (req, res) => {
       const id = req.params.id;
       const opportunity = await opportunityCollection.findOne({
