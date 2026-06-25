@@ -5,6 +5,8 @@ const port = process.env.PORT;
 app.use(express.json());
 const cors = require("cors");
 app.use(cors());
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = process.env.MONGO_URI;
@@ -223,12 +225,10 @@ async function run() {
 
         res.send(enriched);
       } catch (err) {
-        res
-          .status(500)
-          .send({
-            message: "Failed to fetch featured opportunities",
-            error: err.message,
-          });
+        res.status(500).send({
+          message: "Failed to fetch featured opportunities",
+          error: err.message,
+        });
       }
     });
 
@@ -293,12 +293,10 @@ async function run() {
           totalPages: Math.ceil(total / parseInt(limit)),
         });
       } catch (err) {
-        res
-          .status(500)
-          .send({
-            message: "Failed to fetch opportunities",
-            error: err.message,
-          });
+        res.status(500).send({
+          message: "Failed to fetch opportunities",
+          error: err.message,
+        });
       }
     });
 
@@ -615,6 +613,93 @@ async function run() {
           message: "Failed to fetch transactions",
           error: err.message,
         });
+      }
+    });
+
+    // Stripe payment related APIs
+    app.post("/api/payments/create-checkout", async (req, res) => {
+      try {
+        const { user_email } = req.body;
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          mode: "payment",
+          customer_email: user_email,
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: "StartupForge Premium",
+                  description: "Unlimited opportunity postings for founders",
+                },
+                unit_amount: 4900,
+              },
+              quantity: 1,
+            },
+          ],
+          success_url: `${process.env.NEXT_PUBLIC_APP_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/founder/opportunities/new`,
+        });
+
+        res.send({ url: session.url });
+      } catch (err) {
+        res.status(500).send({
+          message: "Failed to create checkout session",
+          error: err.message,
+        });
+      }
+    });
+
+    app.post("/api/payments/verify", async (req, res) => {
+      try {
+        const { session_id } = req.body;
+
+        const session = await stripe.checkout.sessions.retrieve(session_id);
+
+        if (session.payment_status !== "paid") {
+          return res.status(400).send({ message: "Payment not completed" });
+        }
+
+        const user_email = session.customer_email;
+
+        const existing = await db.collection("payments").findOne({
+          transaction_id: session.id,
+        });
+
+        if (!existing) {
+          await db.collection("payments").insertOne({
+            user_email,
+            amount: session.amount_total / 100,
+            transaction_id: session.id,
+            payment_status: "succeeded",
+            paid_at: new Date(),
+            createdAt: new Date(),
+          });
+
+          await db
+            .collection("user")
+            .updateOne(
+              { email: user_email },
+              { $set: { isPremium: true, updatedAt: new Date() } },
+            );
+        }
+
+        res.send({ success: true, user_email });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ message: "Failed to verify payment", error: err.message });
+      }
+    });
+
+    app.get("/api/payments/status/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        const user = await db.collection("user").findOne({ email });
+        res.send({ isPremium: user?.isPremium || false });
+      } catch (err) {
+        res.status(500).send({ message: "Failed to check premium status" });
       }
     });
 
