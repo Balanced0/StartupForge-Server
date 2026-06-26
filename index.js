@@ -703,6 +703,120 @@ async function run() {
       }
     });
 
+    // Founder overview dashboard API
+    app.get("/api/founder/overview", async (req, res) => {
+      try {
+        const { founder_email } = req.query;
+        if (!founder_email) {
+          return res.status(400).send({ message: "founder_email is required" });
+        }
+
+        const startups = await startupCollection
+          .find({ founder_email })
+          .toArray();
+
+        const startupIds = startups.map((s) => s._id.toString());
+
+        const opportunities =
+          startupIds.length > 0
+            ? await opportunityCollection
+                .find({ startup_id: { $in: startupIds } })
+                .toArray()
+            : [];
+
+        const opportunityIds = opportunities.map((o) => o._id.toString());
+
+        const applications =
+          opportunityIds.length > 0
+            ? await db
+                .collection("applications")
+                .find({ opportunity_id: { $in: opportunityIds } })
+                .sort({ applied_at: -1 })
+                .toArray()
+            : [];
+
+        const totalStartups = startups.length;
+        const totalOpportunities = opportunities.length;
+        const totalApplications = applications.length;
+        const acceptedApplications = applications.filter(
+          (a) => a.status === "Accepted"
+        ).length;
+
+        const now = new Date();
+        const monthLabels = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          monthLabels.push({
+            key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+            label: d.toLocaleString("en-US", { month: "short" }),
+          });
+        }
+
+        const appsByMonth = monthLabels.map(({ key, label }) => {
+          const count = applications.filter((a) => {
+            const date = new Date(a.applied_at || a.createdAt);
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+            return monthKey === key;
+          }).length;
+          return { month: label, applications: count };
+        });
+
+        const workTypeMap = {};
+        opportunities.forEach((o) => {
+          const types = Array.isArray(o.work_type)
+            ? o.work_type
+            : [o.work_type || "Other"];
+          types.forEach((t) => {
+            workTypeMap[t] = (workTypeMap[t] || 0) + 1;
+          });
+        });
+        const opportunitiesByWorkType = Object.entries(workTypeMap).map(
+          ([name, value]) => ({ name, value })
+        );
+
+        const statusMap = { Pending: 0, Accepted: 0, Rejected: 0 };
+        applications.forEach((a) => {
+          const s = a.status || "Pending";
+          if (statusMap[s] !== undefined) statusMap[s]++;
+          else statusMap["Pending"]++;
+        });
+        const applicationsByStatus = Object.entries(statusMap).map(
+          ([status, count]) => ({ status, count })
+        );
+
+        const oppMap = {};
+        opportunities.forEach((o) => {
+          oppMap[o._id.toString()] = o.role_title || "Unknown Role";
+        });
+
+        const recentApplications = applications.slice(0, 5).map((a) => ({
+          _id: a._id,
+          applicant_email: a.applicant_email,
+          opportunity_name: oppMap[a.opportunity_id] || "Unknown Role",
+          status: a.status || "Pending",
+          applied_at: a.applied_at || a.createdAt,
+        }));
+
+        res.send({
+          stats: {
+            totalStartups,
+            totalOpportunities,
+            totalApplications,
+            acceptedApplications,
+          },
+          appsByMonth,
+          opportunitiesByWorkType,
+          applicationsByStatus,
+          recentApplications,
+        });
+      } catch (err) {
+        res.status(500).send({
+          message: "Failed to fetch founder overview",
+          error: err.message,
+        });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
