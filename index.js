@@ -583,34 +583,80 @@ async function run() {
 
     app.get("/api/admin/transactions", async (req, res) => {
       try {
-        // dummy
-        const mockTransactions = [
-          {
-            _id: "t1",
-            user: "alex.founder@example.com",
-            amount: 49.0,
-            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Succeeded",
-          },
-          {
-            _id: "t2",
-            user: "sarah.jones@example.com",
-            amount: 99.0,
-            date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Succeeded",
-          },
-          {
-            _id: "t3",
-            user: "michael.smith@example.com",
-            amount: 49.0,
-            date: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-            paymentStatus: "Pending",
-          },
-        ];
-        res.send(mockTransactions);
+        const payments = await db
+          .collection("payments")
+          .find({})
+          .sort({ paid_at: -1 })
+          .toArray();
+
+        const normalised = payments.map((p) => ({
+          _id: p._id,
+          user: p.user_email,
+          amount: p.amount,
+          date: p.paid_at || p.createdAt,
+          paymentStatus:
+            p.payment_status === "succeeded" ? "Succeeded" : p.payment_status,
+          transaction_id: p.transaction_id,
+        }));
+
+        res.send(normalised);
       } catch (err) {
         res.status(500).send({
           message: "Failed to fetch transactions",
+          error: err.message,
+        });
+      }
+    });
+
+    app.get("/api/admin/overview-charts", async (req, res) => {
+      try {
+        const users = await db.collection("user").find({}).toArray();
+        const startups = await db.collection("startups").find({}).toArray();
+
+        const roleMap = {};
+        users.forEach((u) => {
+          const role = u.role || "collaborator";
+          roleMap[role] = (roleMap[role] || 0) + 1;
+        });
+        const usersByRole = Object.entries(roleMap).map(([name, value]) => ({
+          name: name.charAt(0).toUpperCase() + name.slice(1),
+          value,
+        }));
+
+        const statusMap = {};
+        startups.forEach((s) => {
+          const st = s.status || "pending";
+          statusMap[st] = (statusMap[st] || 0) + 1;
+        });
+        const startupsByStatus = Object.entries(statusMap).map(
+          ([status, count]) => ({
+            status: status.charAt(0).toUpperCase() + status.slice(1),
+            count,
+          })
+        );
+
+        const now = new Date();
+        const monthLabels = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          monthLabels.push({
+            key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+            label: d.toLocaleString("en-US", { month: "short" }),
+          });
+        }
+        const signupsByMonth = monthLabels.map(({ key, label }) => {
+          const count = users.filter((u) => {
+            const d = new Date(u.createdAt);
+            const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            return mk === key;
+          }).length;
+          return { month: label, signups: count };
+        });
+
+        res.send({ usersByRole, startupsByStatus, signupsByMonth });
+      } catch (err) {
+        res.status(500).send({
+          message: "Failed to fetch overview charts",
           error: err.message,
         });
       }
@@ -700,6 +746,75 @@ async function run() {
         res.send({ isPremium: user?.isPremium || false });
       } catch (err) {
         res.status(500).send({ message: "Failed to check premium status" });
+      }
+    });
+
+    // Founder applications management APIs
+    app.get("/api/founder/applications", async (req, res) => {
+      try {
+        const { founder_email } = req.query;
+        if (!founder_email) {
+          return res.status(400).send({ message: "founder_email is required" });
+        }
+
+        const startups = await startupCollection
+          .find({ founder_email })
+          .toArray();
+        const startupIds = startups.map((s) => s._id.toString());
+
+        const opportunities =
+          startupIds.length > 0
+            ? await opportunityCollection
+                .find({ startup_id: { $in: startupIds } })
+                .toArray()
+            : [];
+        const opportunityIds = opportunities.map((o) => o._id.toString());
+
+        const oppMap = {};
+        opportunities.forEach((o) => {
+          oppMap[o._id.toString()] = o.role_title || "Unknown Role";
+        });
+
+        const applications =
+          opportunityIds.length > 0
+            ? await db
+                .collection("applications")
+                .find({ opportunity_id: { $in: opportunityIds } })
+                .sort({ applied_at: -1 })
+                .toArray()
+            : [];
+
+        const enriched = applications.map((a) => ({
+          ...a,
+          opportunity_name: oppMap[a.opportunity_id] || "Unknown Role",
+        }));
+
+        res.send(enriched);
+      } catch (err) {
+        res.status(500).send({
+          message: "Failed to fetch founder applications",
+          error: err.message,
+        });
+      }
+    });
+
+    app.patch("/api/applications/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (!["Accepted", "Rejected", "Pending"].includes(status)) {
+          return res.status(400).send({ message: "Invalid status" });
+        }
+        const result = await db.collection("applications").updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status, updatedAt: new Date() } }
+        );
+        res.send({ success: true, result });
+      } catch (err) {
+        res.status(500).send({
+          message: "Failed to update application status",
+          error: err.message,
+        });
       }
     });
 
