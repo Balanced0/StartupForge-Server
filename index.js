@@ -4,7 +4,81 @@ const app = express();
 const port = process.env.PORT;
 app.use(express.json());
 const cors = require("cors");
-app.use(cors());
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  credentials: true,
+}));
+app.use(cookieParser());
+
+// ── JWT Middleware ──
+
+function verifyToken(req, res, next) {
+  const token = req.cookies?.sf_token;
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorised — no token" });
+  }
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ message: "Unauthorised — invalid or expired token" });
+  }
+}
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ message: "Forbidden — admin access required" });
+  }
+  next();
+}
+
+function requireFounder(req, res, next) {
+  if (req.user?.role !== "founder" && req.user?.role !== "admin") {
+    return res.status(403).json({ message: "Forbidden — founder access required" });
+  }
+  next();
+}
+
+// ── Auth Endpoints ──
+
+app.post("/api/auth/token", (req, res) => {
+  const internalSecret = req.headers["x-internal-secret"];
+  if (internalSecret !== process.env.INTERNAL_SECRET) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+
+  const { id, email, name, role } = req.body;
+  if (!email || !role) {
+    return res.status(400).json({ message: "Missing user payload" });
+  }
+
+  const token = jwt.sign(
+    { id, email, name, role },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  res.cookie("sf_token", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  return res.json({ success: true });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  res.clearCookie("sf_token", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+  return res.json({ success: true });
+});
 const Stripe = require("stripe");
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -149,7 +223,7 @@ async function run() {
       res.send(startup);
     });
 
-    app.post("/api/startups", async (req, res) => {
+    app.post("/api/startups", verifyToken, async (req, res) => {
       const startup = req.body;
       const new_startup = {
         ...startup,
@@ -161,7 +235,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/api/startups/:id", async (req, res) => {
+    app.patch("/api/startups/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const updates = req.body;
       const result = await startupCollection.updateOne(
@@ -171,7 +245,7 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/api/startups/:id", async (req, res) => {
+    app.delete("/api/startups/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const result = await startupCollection.deleteOne({
         _id: new ObjectId(id),
@@ -180,7 +254,7 @@ async function run() {
     });
 
     //Opportunity related apis
-    app.post("/api/opportunities", async (req, res) => {
+    app.post("/api/opportunities", verifyToken, async (req, res) => {
       const opportunity = req.body;
       const doc = {
         ...opportunity,
@@ -308,7 +382,7 @@ async function run() {
       res.send(opportunity);
     });
 
-    app.patch("/api/opportunities/:id", async (req, res) => {
+    app.patch("/api/opportunities/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const updates = req.body;
       const result = await opportunityCollection.updateOne(
@@ -318,7 +392,7 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/api/opportunities/:id", async (req, res) => {
+    app.delete("/api/opportunities/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const result = await opportunityCollection.deleteOne({
         _id: new ObjectId(id),
@@ -327,7 +401,7 @@ async function run() {
     });
 
     // Application related APIs
-    app.post("/api/applications", async (req, res) => {
+    app.post("/api/applications", verifyToken, async (req, res) => {
       const application = req.body;
       const existing = await db.collection("applications").findOne({
         opportunity_id: application.opportunity_id,
@@ -349,7 +423,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/api/applications", async (req, res) => {
+    app.get("/api/applications", verifyToken, async (req, res) => {
       const { applicant_email } = req.query;
       const query = applicant_email ? { applicant_email } : {};
 
@@ -445,13 +519,13 @@ async function run() {
     });
 
     // User Profile related APIs
-    app.get("/api/users/:email", async (req, res) => {
+    app.get("/api/users/:email", verifyToken, async (req, res) => {
       const { email } = req.params;
       const user = await db.collection("user").findOne({ email });
       res.send(user || {});
     });
 
-    app.patch("/api/users/:email", async (req, res) => {
+    app.patch("/api/users/:email", verifyToken, async (req, res) => {
       const { email } = req.params;
       const { name, image, skills, bio } = req.body;
       const result = await db.collection("user").updateOne(
@@ -475,7 +549,7 @@ async function run() {
     });
 
     // Admin dashboard related APIs
-    app.get("/api/admin/stats", async (req, res) => {
+    app.get("/api/admin/stats", verifyToken, requireAdmin, async (req, res) => {
       try {
         const totalUsers = await db.collection("user").countDocuments();
         const totalStartups = await db.collection("startups").countDocuments();
@@ -496,7 +570,7 @@ async function run() {
       }
     });
 
-    app.get("/api/admin/users", async (req, res) => {
+    app.get("/api/admin/users", verifyToken, requireAdmin, async (req, res) => {
       try {
         const users = await db.collection("user").find({}).toArray();
         res.send(users);
@@ -507,7 +581,7 @@ async function run() {
       }
     });
 
-    app.post("/api/admin/users/:email/block", async (req, res) => {
+    app.post("/api/admin/users/:email/block", verifyToken, requireAdmin, async (req, res) => {
       try {
         const { email } = req.params;
         const result = await db
@@ -521,7 +595,7 @@ async function run() {
       }
     });
 
-    app.post("/api/admin/users/:email/unblock", async (req, res) => {
+    app.post("/api/admin/users/:email/unblock", verifyToken, requireAdmin, async (req, res) => {
       try {
         const { email } = req.params;
         const result = await db
@@ -535,7 +609,7 @@ async function run() {
       }
     });
 
-    app.get("/api/admin/startups", async (req, res) => {
+    app.get("/api/admin/startups", verifyToken, requireAdmin, async (req, res) => {
       try {
         const startups = await db
           .collection("startups")
@@ -550,7 +624,7 @@ async function run() {
       }
     });
 
-    app.post("/api/admin/startups/:id/approve", async (req, res) => {
+    app.post("/api/admin/startups/:id/approve", verifyToken, requireAdmin, async (req, res) => {
       try {
         const { id } = req.params;
         const result = await db
@@ -567,7 +641,7 @@ async function run() {
       }
     });
 
-    app.delete("/api/admin/startups/:id", async (req, res) => {
+    app.delete("/api/admin/startups/:id", verifyToken, requireAdmin, async (req, res) => {
       try {
         const { id } = req.params;
         const result = await db.collection("startups").deleteOne({
@@ -581,7 +655,7 @@ async function run() {
       }
     });
 
-    app.get("/api/admin/transactions", async (req, res) => {
+    app.get("/api/admin/transactions", verifyToken, requireAdmin, async (req, res) => {
       try {
         const payments = await db
           .collection("payments")
@@ -608,7 +682,7 @@ async function run() {
       }
     });
 
-    app.get("/api/admin/overview-charts", async (req, res) => {
+    app.get("/api/admin/overview-charts", verifyToken, requireAdmin, async (req, res) => {
       try {
         const users = await db.collection("user").find({}).toArray();
         const startups = await db.collection("startups").find({}).toArray();
@@ -663,7 +737,7 @@ async function run() {
     });
 
     // Stripe payment related APIs
-    app.post("/api/payments/create-checkout", async (req, res) => {
+    app.post("/api/payments/create-checkout", verifyToken, async (req, res) => {
       try {
         const { user_email } = req.body;
 
@@ -697,7 +771,7 @@ async function run() {
       }
     });
 
-    app.post("/api/payments/verify", async (req, res) => {
+    app.post("/api/payments/verify", verifyToken, async (req, res) => {
       try {
         const { session_id } = req.body;
 
@@ -739,7 +813,7 @@ async function run() {
       }
     });
 
-    app.get("/api/payments/status/:email", async (req, res) => {
+    app.get("/api/payments/status/:email", verifyToken, async (req, res) => {
       try {
         const { email } = req.params;
         const user = await db.collection("user").findOne({ email });
@@ -750,7 +824,7 @@ async function run() {
     });
 
     // Founder applications management APIs
-    app.get("/api/founder/applications", async (req, res) => {
+    app.get("/api/founder/applications", verifyToken, requireFounder, async (req, res) => {
       try {
         const { founder_email } = req.query;
         if (!founder_email) {
@@ -798,7 +872,7 @@ async function run() {
       }
     });
 
-    app.patch("/api/applications/:id/status", async (req, res) => {
+    app.patch("/api/applications/:id/status", verifyToken, requireFounder, async (req, res) => {
       try {
         const { id } = req.params;
         const { status } = req.body;
@@ -819,7 +893,7 @@ async function run() {
     });
 
     // Founder overview dashboard API
-    app.get("/api/founder/overview", async (req, res) => {
+    app.get("/api/founder/overview", verifyToken, requireFounder, async (req, res) => {
       try {
         const { founder_email } = req.query;
         if (!founder_email) {
