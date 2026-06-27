@@ -104,8 +104,6 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = process.env.MONGO_URI;
 
-// Reuse the connection across warm serverless invocations.
-// connectPromise is module-level so it's only created once per container lifecycle.
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -272,10 +270,32 @@ app.patch("/api/startups/:id", verifyToken, async (req, res) => {
 
 app.delete("/api/startups/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
-  const result = await (await getDb()).collection("startups").deleteOne({
-    _id: new ObjectId(id),
-  });
-  res.send(result);
+  const db = await getDb();
+
+  try {
+    const opportunities = await db
+      .collection("opportunities")
+      .find({ startup_id: id }, { projection: { _id: 1 } })
+      .toArray();
+
+    const oppIds = opportunities.map((o) => o._id.toString());
+
+    if (oppIds.length > 0) {
+      await db
+        .collection("applications")
+        .deleteMany({ opportunity_id: { $in: oppIds } });
+    }
+
+    await db.collection("opportunities").deleteMany({ startup_id: id });
+
+    const result = await db
+      .collection("startups")
+      .deleteOne({ _id: new ObjectId(id) });
+
+    res.send(result);
+  } catch (err) {
+    res.status(500).send({ message: "Failed to delete startup", error: err.message });
+  }
 });
 
 //Opportunity related apis
