@@ -1086,8 +1086,18 @@ console.log("Pinged your deployment. You successfully connected to MongoDB!");
 //}
 //run().catch(console.dir);
 
+app.use((err, req, res, next) => {
+  console.error("GLOBAL ERROR:", err);
+  res.status(500).json({
+    message: "Internal Server Error",
+    error: err.message,
+    stack: err.stack,
+  });
+});
+
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });
 
 module.exports = app;
+
