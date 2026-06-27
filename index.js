@@ -104,7 +104,8 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = process.env.MONGO_URI;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+// Reuse the connection across warm serverless invocations.
+// connectPromise is module-level so it's only created once per container lifecycle.
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -113,26 +114,24 @@ const client = new MongoClient(uri, {
   },
 });
 
-//async function run() {
-//try {
-// Connect the client to the server	(optional starting in v4.7)
-//await client.connect();
+let connectPromise = null;
 
-client
-  .connect(() => {
-    console.log("Connected to MongoDB");
-  })
-  .catch(console.dir);
+async function getDb() {
+  if (!connectPromise) {
+    connectPromise = client.connect().then(() => {
+      console.log("Connected to MongoDB");
+      return client.db("StartUpForge");
+    });
+  }
+  return connectPromise;
+}
 
-const db = client.db("StartUpForge");
-const startupCollection = db.collection("startups");
-const opportunityCollection = db.collection("opportunities");
 
 //startup related apis
 app.get("/api/startups", async (req, res) => {
   const { founder_email } = req.query;
   const query = founder_email ? { founder_email } : {};
-  const startups = await startupCollection
+  const startups = await (await getDb()).collection("startups")
     .find(query)
     .sort({ createdAt: -1 })
     .toArray();
@@ -141,7 +140,7 @@ app.get("/api/startups", async (req, res) => {
 
 app.get("/api/startups/featured", async (req, res) => {
   try {
-    const startups = await startupCollection
+    const startups = await (await getDb()).collection("startups")
       .find({ status: "active" })
       .sort({ createdAt: -1 })
       .limit(6)
@@ -151,12 +150,12 @@ app.get("/api/startups/featured", async (req, res) => {
       startups.map(async (startup) => {
         const id = startup._id.toString();
 
-        const openings_count = await opportunityCollection.countDocuments({
+        const openings_count = await (await getDb()).collection("opportunities").countDocuments({
           startup_id: id,
           status: "open",
         });
 
-        const opps = await opportunityCollection
+        const opps = await (await getDb()).collection("opportunities")
           .find({ startup_id: id })
           .project({ _id: 1 })
           .toArray();
@@ -165,7 +164,7 @@ app.get("/api/startups/featured", async (req, res) => {
 
         const members_count =
           oppIds.length > 0
-            ? await db.collection("applications").countDocuments({
+            ? await (await getDb()).collection("applications").countDocuments({
                 opportunity_id: { $in: oppIds },
                 status: "Accepted",
               })
@@ -200,7 +199,7 @@ app.get("/api/startups/browse", async (req, res) => {
     if (funding_stage && funding_stage !== "All")
       query.funding_stage = funding_stage;
 
-    const startups = await startupCollection
+    const startups = await (await getDb()).collection("startups")
       .find(query)
       .sort({ createdAt: -1 })
       .toArray();
@@ -209,12 +208,12 @@ app.get("/api/startups/browse", async (req, res) => {
       startups.map(async (startup) => {
         const id = startup._id.toString();
 
-        const openings_count = await opportunityCollection.countDocuments({
+        const openings_count = await (await getDb()).collection("opportunities").countDocuments({
           startup_id: id,
           status: "open",
         });
 
-        const opps = await opportunityCollection
+        const opps = await (await getDb()).collection("opportunities")
           .find({ startup_id: id })
           .project({ _id: 1 })
           .toArray();
@@ -223,7 +222,7 @@ app.get("/api/startups/browse", async (req, res) => {
 
         const members_count =
           oppIds.length > 0
-            ? await db.collection("applications").countDocuments({
+            ? await (await getDb()).collection("applications").countDocuments({
                 opportunity_id: { $in: oppIds },
                 status: "Accepted",
               })
@@ -243,7 +242,7 @@ app.get("/api/startups/browse", async (req, res) => {
 
 app.get("/api/startups/:id", async (req, res) => {
   const id = req.params.id;
-  const startup = await startupCollection.findOne({
+  const startup = await (await getDb()).collection("startups").findOne({
     _id: new ObjectId(id),
   });
   res.send(startup);
@@ -257,14 +256,14 @@ app.post("/api/startups", verifyToken, async (req, res) => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const result = await startupCollection.insertOne(new_startup);
+  const result = await (await getDb()).collection("startups").insertOne(new_startup);
   res.send(result);
 });
 
 app.patch("/api/startups/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
   const updates = req.body;
-  const result = await startupCollection.updateOne(
+  const result = await (await getDb()).collection("startups").updateOne(
     { _id: new ObjectId(id) },
     { $set: { ...updates, updatedAt: new Date() } },
   );
@@ -273,7 +272,7 @@ app.patch("/api/startups/:id", verifyToken, async (req, res) => {
 
 app.delete("/api/startups/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
-  const result = await startupCollection.deleteOne({
+  const result = await (await getDb()).collection("startups").deleteOne({
     _id: new ObjectId(id),
   });
   res.send(result);
@@ -288,14 +287,14 @@ app.post("/api/opportunities", verifyToken, async (req, res) => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const result = await opportunityCollection.insertOne(doc);
+  const result = await (await getDb()).collection("opportunities").insertOne(doc);
   res.send(result);
 });
 
 app.get("/api/opportunities", async (req, res) => {
   const { startup_id } = req.query;
   const query = startup_id ? { startup_id } : {};
-  const opportunities = await opportunityCollection
+  const opportunities = await (await getDb()).collection("opportunities")
     .find(query)
     .sort({ createdAt: -1 })
     .toArray();
@@ -304,7 +303,7 @@ app.get("/api/opportunities", async (req, res) => {
 
 app.get("/api/opportunities/featured", async (req, res) => {
   try {
-    const opportunities = await opportunityCollection
+    const opportunities = await (await getDb()).collection("opportunities")
       .find({ status: "open" })
       .sort({ createdAt: -1 })
       .limit(6)
@@ -312,7 +311,7 @@ app.get("/api/opportunities/featured", async (req, res) => {
 
     const enriched = await Promise.all(
       opportunities.map(async (opp) => {
-        const startup = await startupCollection.findOne({
+        const startup = await (await getDb()).collection("startups").findOne({
           _id: new ObjectId(opp.startup_id),
         });
         return {
@@ -354,7 +353,7 @@ app.get("/api/opportunities/browse", async (req, res) => {
 
     let startupIds = null;
     if (industry && industry !== "All") {
-      const matchingStartups = await startupCollection
+      const matchingStartups = await (await getDb()).collection("startups")
         .find({ industry: { $regex: industry, $options: "i" } })
         .project({ _id: 1 })
         .toArray();
@@ -363,9 +362,9 @@ app.get("/api/opportunities/browse", async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const total = await opportunityCollection.countDocuments(query);
+    const total = await (await getDb()).collection("opportunities").countDocuments(query);
 
-    const opportunities = await opportunityCollection
+    const opportunities = await (await getDb()).collection("opportunities")
       .find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -374,7 +373,7 @@ app.get("/api/opportunities/browse", async (req, res) => {
 
     const enriched = await Promise.all(
       opportunities.map(async (opp) => {
-        const startup = await startupCollection.findOne({
+        const startup = await (await getDb()).collection("startups").findOne({
           _id: new ObjectId(opp.startup_id),
         });
         return {
@@ -402,7 +401,7 @@ app.get("/api/opportunities/browse", async (req, res) => {
 
 app.get("/api/opportunities/:id", async (req, res) => {
   const id = req.params.id;
-  const opportunity = await opportunityCollection.findOne({
+  const opportunity = await (await getDb()).collection("opportunities").findOne({
     _id: new ObjectId(id),
   });
   res.send(opportunity);
@@ -411,7 +410,7 @@ app.get("/api/opportunities/:id", async (req, res) => {
 app.patch("/api/opportunities/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
   const updates = req.body;
-  const result = await opportunityCollection.updateOne(
+  const result = await (await getDb()).collection("opportunities").updateOne(
     { _id: new ObjectId(id) },
     { $set: { ...updates, updatedAt: new Date() } },
   );
@@ -420,7 +419,7 @@ app.patch("/api/opportunities/:id", verifyToken, async (req, res) => {
 
 app.delete("/api/opportunities/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
-  const result = await opportunityCollection.deleteOne({
+  const result = await (await getDb()).collection("opportunities").deleteOne({
     _id: new ObjectId(id),
   });
   res.send(result);
@@ -429,7 +428,7 @@ app.delete("/api/opportunities/:id", verifyToken, async (req, res) => {
 // Application related APIs
 app.post("/api/applications", verifyToken, async (req, res) => {
   const application = req.body;
-  const existing = await db.collection("applications").findOne({
+  const existing = await (await getDb()).collection("applications").findOne({
     opportunity_id: application.opportunity_id,
     applicant_email: application.applicant_email,
   });
@@ -445,7 +444,7 @@ app.post("/api/applications", verifyToken, async (req, res) => {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const result = await db.collection("applications").insertOne(doc);
+  const result = await (await getDb()).collection("applications").insertOne(doc);
   res.send(result);
 });
 
@@ -544,14 +543,14 @@ app.get("/api/applications", verifyToken, async (req, res) => {
 // User Profile related APIs
 app.get("/api/users/:email", verifyToken, async (req, res) => {
   const { email } = req.params;
-  const user = await db.collection("user").findOne({ email });
+  const user = await (await getDb()).collection("user").findOne({ email });
   res.send(user || {});
 });
 
 app.patch("/api/users/:email", verifyToken, async (req, res) => {
   const { email } = req.params;
   const { name, image, skills, bio } = req.body;
-  const result = await db.collection("user").updateOne(
+  const result = await (await getDb()).collection("user").updateOne(
     { email },
     {
       $set: {
@@ -574,8 +573,8 @@ app.patch("/api/users/:email", verifyToken, async (req, res) => {
 // Admin dashboard related APIs
 app.get("/api/admin/stats", verifyToken, requireAdmin, async (req, res) => {
   try {
-    const totalUsers = await db.collection("user").countDocuments();
-    const totalStartups = await db.collection("startups").countDocuments();
+    const totalUsers = await (await getDb()).collection("user").countDocuments();
+    const totalStartups = await (await getDb()).collection("startups").countDocuments();
     const totalOpportunities = await db
       .collection("opportunities")
       .countDocuments();
@@ -595,7 +594,7 @@ app.get("/api/admin/stats", verifyToken, requireAdmin, async (req, res) => {
 
 app.get("/api/admin/users", verifyToken, requireAdmin, async (req, res) => {
   try {
-    const users = await db.collection("user").find({}).toArray();
+    const users = await (await getDb()).collection("user").find({}).toArray();
     res.send(users);
   } catch (err) {
     res
@@ -686,7 +685,7 @@ app.delete(
   async (req, res) => {
     try {
       const { id } = req.params;
-      const result = await db.collection("startups").deleteOne({
+      const result = await (await getDb()).collection("startups").deleteOne({
         _id: new ObjectId(id),
       });
       res.send({ success: true, result });
@@ -736,8 +735,8 @@ app.get(
   requireAdmin,
   async (req, res) => {
     try {
-      const users = await db.collection("user").find({}).toArray();
-      const startups = await db.collection("startups").find({}).toArray();
+      const users = await (await getDb()).collection("user").find({}).toArray();
+      const startups = await (await getDb()).collection("startups").find({}).toArray();
 
       const roleMap = {};
       users.forEach((u) => {
@@ -836,12 +835,12 @@ app.post("/api/payments/verify", verifyToken, async (req, res) => {
 
     const user_email = session.customer_email;
 
-    const existing = await db.collection("payments").findOne({
+    const existing = await (await getDb()).collection("payments").findOne({
       transaction_id: session.id,
     });
 
     if (!existing) {
-      await db.collection("payments").insertOne({
+      await (await getDb()).collection("payments").insertOne({
         user_email,
         amount: session.amount_total / 100,
         transaction_id: session.id,
@@ -869,7 +868,7 @@ app.post("/api/payments/verify", verifyToken, async (req, res) => {
 app.get("/api/payments/status/:email", verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
-    const user = await db.collection("user").findOne({ email });
+    const user = await (await getDb()).collection("user").findOne({ email });
     res.send({ isPremium: user?.isPremium || false });
   } catch (err) {
     res.status(500).send({ message: "Failed to check premium status" });
@@ -888,14 +887,14 @@ app.get(
         return res.status(400).send({ message: "founder_email is required" });
       }
 
-      const startups = await startupCollection
+      const startups = await (await getDb()).collection("startups")
         .find({ founder_email })
         .toArray();
       const startupIds = startups.map((s) => s._id.toString());
 
       const opportunities =
         startupIds.length > 0
-          ? await opportunityCollection
+          ? await (await getDb()).collection("opportunities")
               .find({ startup_id: { $in: startupIds } })
               .toArray()
           : [];
@@ -969,7 +968,7 @@ app.get(
         return res.status(400).send({ message: "founder_email is required" });
       }
 
-      const startups = await startupCollection
+      const startups = await (await getDb()).collection("startups")
         .find({ founder_email })
         .toArray();
 
@@ -977,7 +976,7 @@ app.get(
 
       const opportunities =
         startupIds.length > 0
-          ? await opportunityCollection
+          ? await (await getDb()).collection("opportunities")
               .find({ startup_id: { $in: startupIds } })
               .toArray()
           : [];
