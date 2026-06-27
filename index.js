@@ -28,7 +28,14 @@ app.use(cookieParser());
 // ── JWT Middleware ──
 
 function verifyToken(req, res, next) {
-  const token = req.cookies?.sf_token;
+  let token = req.cookies?.sf_token;
+  if (!token && req.headers.authorization) {
+    const parts = req.headers.authorization.split(" ");
+    if (parts.length === 2 && parts[0] === "Bearer") {
+      token = parts[1];
+    }
+  }
+
   if (!token) {
     return res.status(401).json({ message: "Unauthorised — no token" });
   }
@@ -62,6 +69,8 @@ function requireFounder(req, res, next) {
 
 // ── Auth Endpoints ──
 
+const { createHmac } = require("crypto");
+
 app.post("/api/auth/token", (req, res) => {
   const internalSecret = req.headers["x-internal-secret"];
   if (internalSecret !== process.env.INTERNAL_SECRET) {
@@ -77,8 +86,6 @@ app.post("/api/auth/token", (req, res) => {
     expiresIn: "7d",
   });
 
-  // Return the token in the body so the Next.js proxy route can set it
-  // as a cookie on the correct (frontend) domain via NextResponse.cookies
   return res.json({ success: true, token });
 });
 
